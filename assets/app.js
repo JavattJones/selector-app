@@ -25,12 +25,6 @@ function toast(t){ const el = $("#toast"); el.textContent = t; el.classList.add(
 function chip(color, texto){ return `<span class="chip c-${color}">${esc(texto)}</span>`; }
 const SEM = { verde: "verde", ambar: "ambar", rojo: "rojo" };
 function semaforo(c){ return `<span class="dot d-${SEM[c] || "gris"}"></span>`; }
-function estadoChip(s){
-  if (!s) return "";
-  if (s.estado === "zona_compra") return chip(s.operable === false ? "ambar" : "verde", s.operable === false ? "Zona · fuera top 20" : s.etiqueta);
-  if (s.estado === "extendido") return chip("naranja", s.etiqueta);
-  return chip("gris", s.etiqueta);
-}
 // HTML de los partes (el formato de los antiguos mensajes): solo b/i/u/s/code/pre/a.
 function htmlParte(h){
   let t = esc(h);
@@ -62,53 +56,112 @@ function pintarSub(){
 }
 
 /* ============================================================
+   LENGUAJE LLANO — traducciones de la jerga del Selector
+   ============================================================ */
+// precio sin decimales si es alto (283 $), con 2 si es bajo (14,45 $)
+const px = v => v == null ? "—" : usd(v, Math.abs(v) >= 100 ? 0 : 2);
+const pc0 = v => pct(v, 0);
+const MERCADO = {
+  verde: { t: "Buen momento", s: "El mercado acompaña: es buen momento para operar las oportunidades." },
+  ambar: { t: "Con cuidado", s: "El mercado está mixto: se puede operar, pero con más prudencia." },
+  rojo:  { t: "Mejor esperar", s: "El mercado está débil: la estrategia prefiere no comprar y quedarse en liquidez." },
+};
+function estadoLlano(s){
+  if (!s) return { c: "gris", t: "—" };
+  if (s.estado === "zona_compra") return s.operable === false
+    ? { c: "ambar", t: "Buen precio, fuera de los 20 mejores" }
+    : { c: "verde", t: "Buen momento para entrar" };
+  if (s.estado === "extendido") return { c: "naranja", t: "Ha subido mucho: esperar" };
+  return { c: "gris", t: "Vigilar" };
+}
+function estadoChip(s){ const e = estadoLlano(s); return chip(e.c, e.t); }
+function resumenLlano(t){
+  const s = t.senal || {}, p = t.plan || {};
+  if (s.estado === "zona_compra" && s.operable !== false)
+    return "Ha retrocedido a un buen punto de entrada dentro de una tendencia que sube. Es el tipo de oportunidad que busca la estrategia.";
+  if (s.estado === "zona_compra")
+    return "Está a buen precio, pero no está entre los 20 mejores del ranking: la estrategia solo opera esos.";
+  if (s.estado === "extendido")
+    return `Ha subido mucho en poco tiempo. Mejor esperar a que baje${p.entrada_desde ? ` hacia ${px(p.entrada_desde)}–${px(p.entrada_hasta)}` : ""} antes de entrar.`;
+  return "Tiene buena tendencia, pero todavía no está en un buen punto de entrada. Toca vigilarla.";
+}
+// tamaño de la compra (posición por riesgo): corto + motivo
+function tamanoLlano(c){
+  if (c == null) return "—";
+  return c >= 0.95 ? "normal" : `${Math.round(c * 100)} % de lo normal`;
+}
+function tamanoMotivo(c){ return c != null && c < 0.95 ? " (se mueve mucho: compra menos)" : ""; }
+function riesgoLlano(rr){ return rr == null ? "—" : `Por cada 1 € que arriesgas, puedes ganar ${num(rr, 1)} €`; }
+function resultadosLlano(e, mov){
+  if (!e || !e.inminente) return "";
+  return `<div class="aviso">📅 Presenta resultados el ${esc(e.fecha_es)}: el precio puede dar un salto brusco${mov ? ` (suele moverse ±${num(mov, 0)} %)` : ""}. Cuidado al entrar.</div>`;
+}
+// tarjeta de oportunidad en lenguaje llano (novedades del día)
+function tarjetaOportunidad(n){
+  const dStop = n.precio && n.stop ? (n.stop / n.precio - 1) * 100 : null;
+  const dObj = n.precio && n.objetivo ? (n.objetivo / n.precio - 1) * 100 : null;
+  return `<button class="card op" data-t="${esc(n.ticker)}">
+    <div class="op-h"><span class="dot d-verde"></span><b class="tk">${esc(n.ticker)}</b><span class="muted">${esc(n.nombre)}</span></div>
+    <div class="op-sub">Buen momento para entrar</div>
+    <div class="plan3">
+      <div><span>Comprar</span><b>cerca de ${px(n.precio)}</b></div>
+      <div><span>Salir si baja a</span><b class="neg">${px(n.stop)} <small>(${pc0(dStop)})</small></b></div>
+      <div><span>Objetivo</span><b class="pos">${px(n.objetivo)} <small>(${pc0(dObj)})</small></b></div>
+    </div>
+    <p class="op-txt">${riesgoLlano(n.rr)}.<br>Tamaño de la compra: ${tamanoLlano(n.coef)}${tamanoMotivo(n.coef)}.</p>
+    <span class="mas">Ver ficha ›</span>
+  </button>`;
+}
+
+/* ============================================================
    HOY
    ============================================================ */
 function pintarHoy(){
   const dash = d("dashboard"), el = $("#s-hoy");
   if (!dash) { el.innerHTML = cardVacia("Aún no hay datos. Aparecerán tras el próximo escaneo diario."); return; }
   const r = dash.regimen || {}, a = dash.amplitud || {};
+  const M = MERCADO[r.color] || { t: "—", s: "" };
   const parte = PARTES.find(p => !String(p.id).includes("formula")) || PARTES[0];
   const top = d("top") || [];
-  const nov = (dash.novedades || []);
-  let h = `<div class="card reg reg-${SEM[r.color] || "gris"}">
-      <div class="reg-h">${semaforo(r.color)}<b>Régimen ${esc(r.color || "—")}</b></div>
-      <p>${esc(r.texto || "")}</p>
-      <div class="kpis">
-        <div><span>VIX</span><b>${num(r.vix, 1)}</b></div>
-        <div><span>VIX/VIX3M</span><b>${num(r.vix_ratio, 2)}</b></div>
-        <div><span>SPY vs SMA200</span><b class="${cls(r.spy_dist_sma200_pct)}">${pct(r.spy_dist_sma200_pct)}</b></div>
-        <div><span>Amplitud</span><b>${num(r.amplitud_pct, 0)} %</b></div>
-        <div><span>McClellan</span><b class="${cls(a.oscilador)}">${num(a.oscilador, 0)}</b></div>
-        <div><span>Máx/mín 52s</span><b>${a.nuevos_max52 ?? "—"}/${a.nuevos_min52 ?? "—"}</b></div>
-      </div></div>`;
-  h += `<h2>Señales nuevas</h2>`;
+  const nov = dash.novedades || [];
+  let h = `<div class="card mercado m-${SEM[r.color] || "gris"}">
+      <div class="m-lab">El mercado hoy</div>
+      <div class="m-t">${semaforo(r.color)} ${esc(M.t)}</div>
+      <p>${esc(M.s)}</p>
+      <details><summary>Ver detalles</summary>
+        <p class="muted">${esc(r.texto || "")}</p>
+        <div class="kpis">
+          <div><span>Miedo (VIX)</span><b>${num(r.vix, 0)}</b></div>
+          <div><span>S&amp;P 500 vs su media</span><b class="${cls(r.spy_dist_sma200_pct)}">${pc0(r.spy_dist_sma200_pct)}</b></div>
+          <div><span>Empresas que suben</span><b>${num(r.amplitud_pct, 0)} %</b></div>
+        </div>
+        <p class="muted"><small>VIX: termómetro del miedo (bajo = calma). «Vs su media»: cuánto está el índice por encima de su media de 200 días. «Empresas que suben»: % del mercado en tendencia alcista.</small></p>
+      </details>
+    </div>`;
   if (nov.length) {
-    h += nov.map(n => `<button class="card nov" data-t="${esc(n.ticker)}">
-        <div class="row"><b class="tk">${esc(n.ticker)}</b><span class="muted">#${n.puesto} · ${esc(n.nombre)}</span></div>
-        <div class="niveles"><span>Precio <b>${usd(n.precio)}</b></span><span class="neg">Stop <b>${usd(n.stop)}</b></span><span class="pos">Obj. <b>${usd(n.objetivo)}</b></span></div>
-        <div class="muted">${esc(n.estructura || "")} · R:R ${num(n.rr, 1)} · posición ${num(n.coef, 2)}× · ${esc(n.sector || "")} ${semaforo(n.sector_regimen)}${n.vol_anual >= 60 ? " · vol " + num(n.vol_anual, 0) + " %" : ""}</div>
-      </button>`).join("");
+    h += `<h2>${nov.length === 1 ? "1 oportunidad nueva" : nov.length + " oportunidades nuevas"}</h2>` + nov.map(tarjetaOportunidad).join("");
   } else {
     const enZona = top.filter(t => t.senal && t.senal.estado === "zona_compra" && t.senal.operable !== false);
-    h += cardVacia(enZona.length ? `Ninguna nueva hoy. Siguen en zona de compra: ${enZona.map(t => `<b>${esc(t.ticker)}</b>`).join(", ")}.` : "Ninguna nueva hoy.");
+    h += `<h2>Oportunidades</h2>` + cardVacia(`Hoy no hay oportunidades nuevas.${enZona.length ? `<br>Siguen en buen momento: ${enZona.map(t => `<b>${esc(t.ticker)}</b>`).join(", ")}.` : ""}`);
   }
+  const avisos = (parte ? parte.mensajes : []).filter(m => m.tipo === "cartera");
+  if (avisos.length) h += `<h2>Movimientos en tus pruebas</h2>` + avisos.map(m => `<div class="card parte"><div class="parte-t">${esc(m.titulo)}</div><div class="parte-b">${htmlParte(m.html)}</div></div>`).join("");
   if (parte) {
-    h += `<h2>Parte del ${fecha(parte.fecha)}</h2>`;
-    h += parte.mensajes.map(m => `<div class="card parte"><div class="parte-t">${esc(m.titulo || "")}</div><div class="parte-b">${htmlParte(m.html)}</div></div>`).join("");
+    h += `<details class="card plegable"><summary>Ver el parte completo del ${fecha(parte.fecha)}</summary>` +
+      parte.mensajes.map(m => `<div class="parte"><div class="parte-t">${esc(m.titulo || "")}</div><div class="parte-b">${htmlParte(m.html)}</div></div>`).join("") + `</details>`;
   }
   if (PARTES.length > 1) {
-    h += `<h2>Partes anteriores</h2><div class="card lista">` + PARTES.filter(p => p !== parte).slice(0, 30).map(p =>
-      `<button class="li" data-parte="${esc(p.id)}"><span>${fecha(p.fecha)}</span><span class="muted">${esc(p.titulo || "")}</span></button>`).join("") + `</div>`;
+    h += `<details class="card plegable"><summary>Días anteriores</summary><div class="lista">` + PARTES.filter(p => p !== parte).slice(0, 30).map(p =>
+      `<button class="li" data-parte="${esc(p.id)}"><span>${fecha(p.fecha)}</span><span class="muted">${esc(p.titulo || "")}</span></button>`).join("") + `</div></details>`;
   }
-  h += `<p class="pie">Información, no recomendación. Deja stop y objetivo puestos en el bróker (OCO).</p>`;
+  h += `<p class="pie">Información, no recomendación. Cuando compres, deja puestas en el bróker la orden de salida y la de objetivo (OCO).</p>`;
   el.innerHTML = h;
   el.querySelectorAll("[data-t]").forEach(b => b.onclick = () => abrirFicha(b.dataset.t));
   el.querySelectorAll("[data-parte]").forEach(b => b.onclick = () => abrirParte(b.dataset.parte));
 }
 function abrirParte(id){
   const p = PARTES.find(x => x.id === id); if (!p) return;
-  abrirSheet(`<div class="sh-h"><b>Parte del ${fecha(p.fecha)}</b><span class="muted">${esc(p.titulo || "")}</span></div>` +
+  abrirSheet(`<div class="sh-h"><b>Parte del ${fecha(p.fecha)}</b><div class="muted">${esc(p.titulo || "")}</div></div>` +
     p.mensajes.map(m => `<div class="card parte"><div class="parte-t">${esc(m.titulo || "")}</div><div class="parte-b">${htmlParte(m.html)}</div></div>`).join(""));
 }
 
@@ -120,19 +173,17 @@ function pintarSenales(){
   if (!top) { el.innerHTML = cardVacia("Sin datos del ranking todavía."); return; }
   const F = {
     operables: t => t.senal && t.senal.estado === "zona_compra" && t.senal.operable !== false,
-    zona: t => t.senal && t.senal.estado === "zona_compra",
     todas: () => true,
   };
-  const lista = top.filter(F[filtroSenales]);
-  let h = `<div class="seg">${[["operables", "Operables"], ["zona", "En zona"], ["todas", "Top " + top.length]].map(([k, t]) =>
+  const lista = top.filter(F[filtroSenales] || F.operables);
+  let h = `<p class="intro">Las ${top.length} empresas con la subida más fuerte y ordenada del S&amp;P 500 y el NASDAQ-100. Toca una para ver su plan.</p>
+    <div class="seg">${[["operables", "Para comprar"], ["todas", "Todas"]].map(([k, t]) =>
     `<button data-f="${k}" class="${filtroSenales === k ? "on" : ""}">${t}</button>`).join("")}</div>`;
   h += lista.length ? `<div class="card lista">` + lista.map(t => `<button class="li sen" data-t="${esc(t.ticker)}">
       <span class="pu">${t.puesto}</span>
       <span class="sen-m"><b class="tk">${esc(t.ticker)}</b><span class="muted">${esc(t.nombre)}</span></span>
-      <span class="sen-r">${estadoChip(t.senal)}<span class="muted">12-1 <b class="${cls(t.m12_1)}">${pct(t.m12_1, 0)}</b></span></span>
-    </button>`).join("") + `</div>` : cardVacia("Ninguna señal con este filtro hoy.");
-  const c = (d("dashboard") || {}).concentracion;
-  if (c && c.senales && Object.keys(c.senales).length) h += `<p class="pie">Sectores en señal: ${Object.entries(c.senales).map(([s, n]) => `${esc(s)} ${n}`).join(" · ")}</p>`;
+      <span class="sen-r">${estadoChip(t.senal)}<span class="muted">${pc0(t.m12_1)} en un año</span></span>
+    </button>`).join("") + `</div>` : cardVacia("Hoy ninguna está en buen momento para comprar. Mira «Todas» para ver cuáles vigilar.");
   el.innerHTML = h;
   el.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { filtroSenales = b.dataset.f; pintarSenales(); });
   el.querySelectorAll("[data-t]").forEach(b => b.onclick = () => abrirFicha(b.dataset.t));
@@ -142,47 +193,51 @@ function abrirFicha(ticker){
   const t = (d("top") || []).find(x => x.ticker === ticker);
   const nov = ((d("dashboard") || {}).novedades || []).find(x => x.ticker === ticker);
   if (!t) {
-    if (nov) abrirSheet(`<div class="sh-h"><b class="tk">${esc(nov.ticker)}</b><span class="muted">${esc(nov.nombre)}</span></div>${cardVacia("Fuera del top publicado: solo están los niveles del aviso.")}`);
+    if (nov) abrirSheet(`<div class="sh-h"><b class="tk">${esc(nov.ticker)}</b><div class="muted">${esc(nov.nombre)}</div></div>${tarjetaOportunidad(nov)}`);
     return;
   }
   const p = t.plan || {}, s = t.senal || {}, e = t.earnings, tes = t.tesis || {}, est = t.estructura || {};
-  let h = `<div class="sh-h"><div><b class="tk">${esc(t.ticker)}</b> <span class="muted">#${t.puesto} · score ${num(t.score, 1)}</span></div>
-      <div class="muted">${esc(t.nombre)} · ${esc(t.sector || "")} ${semaforo(t.sector_regimen)}</div></div>
-    <div class="row precio"><b>${usd(t.precio)}</b>${estadoChip(s)}</div>
-    ${s.motivo ? `<p class="muted">${esc(s.motivo)}</p>` : ""}
-    <div class="chart-box"><canvas id="ficha-chart"></canvas></div>`;
-  if (e && e.inminente) h += `<div class="aviso">⚠ Resultados el ${esc(e.fecha_es)} (en ${e.dias} días)${t.mov_resultados ? ` · movimiento típico ±${num(t.mov_resultados.pct, 1)} %` : ""}</div>`;
+  const enZona = s.estado === "zona_compra";
+  const comprarTxt = enZona ? `Comprar cerca de ${px(t.precio)}` : `Esperar a que baje a ${px(p.entrada_desde)}–${px(p.entrada_hasta)}`;
+  const zonaIdeal = enZona && p.entrada_desde && t.precio > p.entrada_hasta
+    ? `<div class="muted"><small>Precio actual. Si puedes esperar, la zona ideal es ${px(p.entrada_desde)}–${px(p.entrada_hasta)}.</small></div>` : "";
+  let h = `<div class="sh-h"><b class="tk">${esc(t.ticker)}</b><div class="muted">${esc(t.nombre)} · ${esc(t.sector || "")} · nº ${t.puesto} del ranking</div></div>
+    <div class="row precio"><b>${px(t.precio)}</b>${estadoChip(s)}</div>
+    <p class="resumen">${esc(resumenLlano(t))}</p>
+    ${resultadosLlano(e, t.mov_resultados && t.mov_resultados.pct)}
+    <div class="chart-box"><canvas id="ficha-chart"></canvas></div>
+    <div class="leyenda"><span><i style="background:#0d9488"></i>Precio</span><span><i class="dash" style="border-color:#fb7185"></i>Salir si baja</span><span><i class="dash" style="border-color:#2dd4bf"></i>Objetivo</span></div>`;
   if (p.disponible) {
-    h += `<h3>Plan de niveles</h3><div class="card kv">
-      <div><span>Zona de entrada</span><b>${usd(p.entrada_desde)} – ${usd(p.entrada_hasta)}</b></div>
-      <div><span>Stop</span><b class="neg">${usd(p.stop)} <small>(${pct(p.stop_dist_pct)})</small></b></div>
-      <div><span>Objetivo técnico</span><b class="pos">${usd(p.objetivo_tecnico)} <small>(${pct(p.objetivo_tecnico_pct)})</small></b></div>
-      <div><span>R:R</span><b>${num(p.rr, 1)}</b></div>
-      <div><span>Posición por riesgo</span><b>${num(p.coef_seguridad, 2)}×</b></div>
-      ${p.objetivo_analistas ? `<div><span>Objetivo analistas</span><b>${usd(p.objetivo_analistas)}</b></div>` : ""}
+    h += `<h3>El plan</h3><div class="card pasos">
+      <div><span class="n">1</span><div><b>${comprarTxt}</b>${zonaIdeal}</div></div>
+      <div><span class="n">2</span><div><b>Salir si baja a <span class="neg">${px(p.stop)}</span></b><small class="muted"> (${pc0(p.stop_dist_pct)})</small><div class="muted"><small>Pon esta orden en el bróker el mismo día de la compra.</small></div></div></div>
+      <div><span class="n">3</span><div><b>Vender en <span class="pos">${px(p.objetivo_tecnico)}</span></b><small class="muted"> (${pc0(p.objetivo_tecnico_pct)})</small></div></div>
     </div>
-    ${p.situacion ? `<p class="muted">${esc(p.situacion)}</p>` : ""}
-    ${p.aviso_stop ? `<p class="aviso">${esc(p.aviso_stop)}</p>` : ""}
-    ${p.aviso_rr ? `<p class="aviso">${esc(p.aviso_rr)}</p>` : ""}
-    <p class="muted"><small>${esc(p.base_objetivo || "")}</small></p>`;
+    <div class="card kv">
+      <div><span>Riesgo / premio</span><b>${p.rr == null ? "—" : `arriesgas 1 € para ganar ${num(p.rr, 1)} €`}</b></div>
+      <div><span>Tamaño de la compra</span><b>${esc(tamanoLlano(p.coef_seguridad))}</b></div>
+    </div>${p.coef_seguridad != null && p.coef_seguridad < 0.95 ? `<p class="muted"><small>Se mueve mucho, así que compra menos de lo habitual: si salta la salida, perderás lo mismo que en una compra normal.</small></p>` : ""}`;
   }
-  if (tes.resumen) {
-    h += `<h3>Tesis</h3><p>${esc(tes.resumen)}</p>`;
-    if ((tes.fuertes || []).length) h += `<ul class="tes pos-l">${tes.fuertes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
-    if ((tes.riesgos || []).length) h += `<ul class="tes neg-l">${tes.riesgos.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`;
-  }
-  h += `<h3>Datos</h3><div class="card kv">
-    <div><span>Momentum 12-1 / 6m / 3m / 1m</span><b><span class="${cls(t.m12_1)}">${pct(t.m12_1, 0)}</span> · <span class="${cls(t.m6)}">${pct(t.m6, 0)}</span> · <span class="${cls(t.m3)}">${pct(t.m3, 0)}</span> · <span class="${cls(t.m1)}">${pct(t.m1, 0)}</span></b></div>
-    <div><span>RSI 14</span><b>${num(t.rsi14, 0)}</b></div>
-    <div><span>Volatilidad anual</span><b>${num(t.vol_anual, 0)} %</b></div>
-    <div><span>Estructura</span><b>${esc(est.etiqueta || "—")}</b></div>
-    <div><span>Distancia al máx. 52s</span><b>${pct(t.dist_max52_pct)}</b></div>
-    ${t.calidad != null ? `<div><span>Calidad fundamental</span><b>pctl ${num(t.calidad, 0)}/100</b></div>` : ""}
-    ${t.sorpresa_eps != null ? `<div><span>Última sorpresa BPA</span><b class="${cls(t.sorpresa_eps)}">${pct(t.sorpresa_eps)}</b></div>` : ""}
-    ${t.estacionalidad_mes ? `<div><span>Estacionalidad ${esc(t.estacionalidad_mes.nombre)}</span><b>${pct(t.estacionalidad_mes.media_pct)} · ${num(t.estacionalidad_mes.positivo_pct, 0)} % positivo</b></div>` : ""}
-    ${e ? `<div><span>Próximos resultados</span><b>${esc(e.fecha_es)} (${e.dias} d)</b></div>` : ""}
-  </div>
-  ${est.detalle ? `<p class="muted">${esc(est.detalle)}</p>` : ""}
+  h += `<details class="card plegable"><summary>Por qué está en la lista</summary>
+      ${tes.resumen ? `<p>${esc(tes.resumen)}</p>` : ""}
+      ${(tes.fuertes || []).length ? `<p class="muted">A favor</p><ul class="tes pos-l">${tes.fuertes.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${(tes.riesgos || []).length ? `<p class="muted">Riesgos</p><ul class="tes neg-l">${tes.riesgos.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    </details>
+    <details class="card plegable"><summary>Datos técnicos</summary><div class="kv">
+      <div><span>Subida en 12 / 6 / 3 / 1 meses</span><b><span class="${cls(t.m12_1)}">${pc0(t.m12_1)}</span> · <span class="${cls(t.m6)}">${pc0(t.m6)}</span> · <span class="${cls(t.m3)}">${pc0(t.m3)}</span> · <span class="${cls(t.m1)}">${pc0(t.m1)}</span></b></div>
+      <div><span>Puntuación (score)</span><b>${num(t.score, 0)}/100</b></div>
+      <div><span>Forma del gráfico</span><b>${esc(est.etiqueta || "—")}</b></div>
+      <div><span>RSI (sobrecompra &gt;70)</span><b>${num(t.rsi14, 0)}</b></div>
+      <div><span>Volatilidad anual</span><b>${num(t.vol_anual, 0)} %</b></div>
+      <div><span>Distancia a su máximo del año</span><b>${pc0(t.dist_max52_pct)}</b></div>
+      ${t.calidad != null ? `<div><span>Calidad del negocio</span><b>${num(t.calidad, 0)}/100</b></div>` : ""}
+      ${p.objetivo_analistas ? `<div><span>Objetivo de los analistas</span><b>${px(p.objetivo_analistas)}</b></div>` : ""}
+      ${e ? `<div><span>Próximos resultados</span><b>${esc(e.fecha_es)}</b></div>` : ""}
+      ${t.estacionalidad_mes ? `<div><span>Historial en ${esc(t.estacionalidad_mes.nombre)}</span><b>${pc0(t.estacionalidad_mes.media_pct)} de media</b></div>` : ""}
+    </div>
+    ${s.motivo ? `<p class="muted"><small>${esc(s.motivo)}</small></p>` : ""}
+    ${p.situacion ? `<p class="muted"><small>${esc(p.situacion)}</small></p>` : ""}
+    </details>
   <p class="pie">Información, no recomendación.</p>`;
   abrirSheet(h);
   pintarGraficoFicha(t);
@@ -190,22 +245,22 @@ function abrirFicha(ticker){
 function pintarGraficoFicha(t){
   const s = t.serie; const cv = $("#ficha-chart"); if (!s || !cv || !window.Chart) return;
   const p = t.plan || {};
-  const linea = (v, color, dash) => v ? { data: s.fechas.map(() => v), borderColor: color, borderWidth: 1, borderDash: dash, pointRadius: 0, fill: false } : null;
+  const linea = (v, color) => v ? { label: "", data: s.fechas.map(() => v), borderColor: color, borderWidth: 1.2, borderDash: [5, 4], pointRadius: 0, fill: false } : null;
   const ds = [
-    { label: "Cierre", data: s.cierre, borderColor: "#0d9488", borderWidth: 2, pointRadius: 0, tension: .15 },
-    { label: "SMA50", data: s.sma50, borderColor: "#f43f5e", borderWidth: 1.2, pointRadius: 0 },
-    { label: "SMA200", data: s.sma200, borderColor: "#8b5cf6", borderWidth: 1.2, pointRadius: 0 },
-    linea(p.stop, "#fb7185", [4, 4]), linea(p.objetivo_tecnico, "#2dd4bf", [4, 4]),
+    { label: "Precio", data: s.cierre, borderColor: "#0d9488", borderWidth: 2.2, pointRadius: 0, tension: .15,
+      fill: { target: "origin" }, backgroundColor: "rgba(13,148,136,.08)" },
+    linea(p.stop, "#fb7185"), linea(p.objetivo_tecnico, "#2dd4bf"),
   ].filter(Boolean);
   if (charts.ficha) charts.ficha.destroy();
-  charts.ficha = new Chart(cv, { type: "line", data: { labels: s.fechas.map(fecha), datasets: ds },
-    options: baseOpts({ legend: false }) });
+  const o = baseOpts({ legend: false });
+  o.plugins.tooltip = { filter: i => i.datasetIndex === 0, callbacks: { label: c => "Precio: " + px(c.parsed.y) } };
+  charts.ficha = new Chart(cv, { type: "line", data: { labels: s.fechas.map(fecha), datasets: ds }, options: o });
 }
 function baseOpts({ legend = true, pctAxis = false } = {}){
   return { responsive: true, maintainAspectRatio: false, animation: false, interaction: { mode: "index", intersect: false },
     plugins: { legend: { display: legend, labels: { color: "#d2cfc9", boxWidth: 10, font: { size: 11 } } },
       tooltip: { callbacks: pctAxis ? { label: c => `${c.dataset.label}: ${pct(c.parsed.y - 100)}` } : {} } },
-    scales: { x: { ticks: { color: "#8f8b84", maxTicksLimit: 5, maxRotation: 0, font: { size: 10 } }, grid: { display: false } },
+    scales: { x: { ticks: { color: "#8f8b84", maxTicksLimit: 4, maxRotation: 0, font: { size: 10 } }, grid: { display: false } },
       y: { ticks: { color: "#8f8b84", font: { size: 10 }, callback: pctAxis ? v => (v - 100 > 0 ? "+" : "") + (v - 100) + "%" : undefined },
         grid: { color: "#222221" } } } };
 }
@@ -218,7 +273,7 @@ function pintarCarteras(){
   if (!comp && !tr && !car) { el.innerHTML = cardVacia("Sin datos todavía."); return; }
   let h = "";
   if (comp && comp.tracks) {
-    h += `<h2>Comparativa vs SPY</h2><div class="card"><div class="chart-box tall"><canvas id="comp-chart"></canvas></div>
+    h += `<h2>¿Cómo van tus pruebas?</h2><p class="intro">Cada línea es una estrategia probada en papel (sin dinero real). La blanca discontinua es el S&amp;P 500: lo que está por encima, le gana.</p><div class="card"><div class="chart-box tall"><canvas id="comp-chart"></canvas></div>
       <p class="muted"><small>Índice base 100 · precios al ${esc(comp.precios_es || "")} · SPY ${pct(comp.spy && comp.spy.ret_pct)}</small></p></div>
       <div class="card lista">${comp.tracks.slice().sort((a, b) => (b.ret_pct ?? -1e9) - (a.ret_pct ?? -1e9)).map(x =>
         `<div class="li"><span><span class="sw" style="background:${esc(x.color)}"></span>${esc(x.nombre)}</span>
@@ -281,17 +336,17 @@ function pintarPosiciones(){
   let h = "";
   if (r) h += `<div class="card kpis">
       <div><span>Abiertas</span><b>${r.n}</b></div><div><span>Invertido</span><b>${usd(r.invertido, 0)}</b></div>
-      <div><span>P/L</span><b class="${cls(r.pl)}">${usd(r.pl, 0)}</b></div><div><span>Sin OCO</span><b class="${r.sin_oco ? "neg" : ""}">${r.sin_oco}</b></div></div>
+      <div><span>Ganancia</span><b class="${cls(r.pl)}">${usd(r.pl, 0)}</b></div><div><span>Sin órdenes</span><b class="${r.sin_oco ? "neg" : ""}">${r.sin_oco}</b></div></div>
       ${r.aviso_concentracion ? `<p class="aviso">${esc(r.aviso_concentracion)}</p>` : ""}`;
   h += `<h2>Abiertas</h2>`;
   h += (ps.abiertas || []).length ? ps.abiertas.map(p => {
     const prog = p.progreso_pct ?? null;
     return `<div class="card pos-c">
       <div class="row"><b class="tk">${esc(p.ticker)}</b><b class="${cls(p.pl_pct)}">${pct(p.pl_pct)} · ${usd(p.pl, 0)}</b></div>
-      <div class="muted">${fecha(p.fecha)} · ${p.dias} días · ${esc(p.sector || "")}${p.oco ? "" : ' · <b class="neg">⚠ sin OCO</b>'}</div>
+      <div class="muted">${fecha(p.fecha)} · ${p.dias} días · ${esc(p.sector || "")}${p.oco ? "" : ' · <b class="neg">⚠ sin órdenes en el bróker</b>'}</div>
       <div class="barra"><span class="b-stop">${usd(p.stop_ajustado || p.stop)}</span><div class="b-pista"><div class="b-pto" style="left:${prog == null ? 50 : prog}%"></div></div><span class="b-obj">${usd(p.objetivo_ajustado || p.objetivo)}</span></div>
-      <div class="muted">Actual ${usd(p.precio_actual)} · al stop ${pct(p.dist_stop_pct)} · al objetivo ${pct(p.dist_objetivo_pct)}</div>
-      ${p.stop_tocado ? `<p class="aviso">Stop tocado: ejecuta, no lo cambies.</p>` : p.objetivo_tocado ? `<p class="aviso ok">Objetivo tocado: ejecuta, no lo cambies.</p>` : ""}
+      <div class="muted">Ahora ${px(p.precio_actual)} · a ${pc0(p.dist_stop_pct)} de la salida · a ${pc0(p.dist_objetivo_pct)} del objetivo</div>
+      ${p.stop_tocado ? `<p class="aviso">Ha tocado el precio de salida: vende, no lo cambies.</p>` : p.objetivo_tocado ? `<p class="aviso ok">Ha llegado al objetivo: vende, no lo cambies.</p>` : ""}
       ${p.earnings && p.earnings.inminente ? `<p class="aviso">⚠ Resultados el ${esc(p.earnings.fecha_es)}</p>` : ""}
     </div>`; }).join("") : cardVacia("No tienes posiciones abiertas.");
   if ((ps.cerradas || []).length) h += `<h2>Cerradas</h2><div class="card lista">${ps.cerradas.slice(0, 30).map(p =>
