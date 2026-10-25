@@ -3,7 +3,7 @@
    IMPORTANTE: en cada despliegue de assets, sube CACHE (sel-v1 → sel-v2…)
    o el móvil seguirá con la versión vieja. La app se recarga sola al
    detectar la nueva. */
-const CACHE = "sel-v2";
+const CACHE = "sel-v3";
 const SHELL = [
   "./", "./index.html", "./manifest.webmanifest",
   "./assets/style.css", "./assets/app.js", "./assets/cloud.js", "./assets/chart.umd.min.js",

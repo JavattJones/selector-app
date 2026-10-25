@@ -61,6 +61,7 @@ function pintarSub(){
 // precio sin decimales si es alto (283 $), con 2 si es bajo (14,45 $)
 const px = v => v == null ? "—" : usd(v, Math.abs(v) >= 100 ? 0 : 2);
 const pc0 = v => pct(v, 0);
+const pts = (v, dec = 1) => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + nf(dec).format(Math.abs(v)) + " pts";
 const MERCADO = {
   verde: { t: "Buen momento", s: "El mercado acompaña: es buen momento para operar las oportunidades." },
   ambar: { t: "Con cuidado", s: "El mercado está mixto: se puede operar, pero con más prudencia." },
@@ -266,64 +267,83 @@ function baseOpts({ legend = true, pctAxis = false } = {}){
 }
 
 /* ============================================================
-   CARTERAS (comparativa + track + carteras en papel)
+   CARTERAS (comparativa + detalle de cada cartera)
    ============================================================ */
+const ORDEN_CARTERAS = ["track", "latigazo", "latigazo_panico", "rebote", "formula", "value_equilibrado", "value_calidad", "value_deepvalue"];
+const DESC_CARTERAS = {
+  track: "Las señales del Selector",
+  latigazo: "Ganadoras que caen fuerte en una semana",
+  latigazo_panico: "Latigazo, solo en días de pánico",
+  rebote: "Buenas empresas sobrevendidas",
+  formula: "Baratas y rentables (Greenblatt)",
+  value_equilibrado: "Value: equilibrio precio-calidad",
+  value_calidad: "Value: las de mejor negocio",
+  value_deepvalue: "Value: las más baratas",
+};
 function pintarCarteras(){
-  const el = $("#s-carteras"), comp = d("comparativa"), tr = d("track"), car = d("carteras");
-  if (!comp && !tr && !car) { el.innerHTML = cardVacia("Sin datos todavía."); return; }
-  let h = "";
+  const el = $("#s-carteras"), comp = d("comparativa"), det = d("carteras_detalle");
+  if (!comp && !det) { el.innerHTML = cardVacia("Sin datos todavía."); return; }
+  const tracks = {}; ((comp && comp.tracks) || []).forEach(t => { tracks[t.clave] = t; });
+  const claves = ORDEN_CARTERAS.filter(k => (det && det[k]) || tracks[k]);
+  let h = `<p class="intro">Estrategias probadas en papel, sin dinero real. Toca una para ver qué valores tiene y cómo va cada uno.</p>`;
   if (comp && comp.tracks) {
-    h += `<h2>¿Cómo van tus pruebas?</h2><p class="intro">Cada línea es una estrategia probada en papel (sin dinero real). La blanca discontinua es el S&amp;P 500: lo que está por encima, le gana.</p><div class="card"><div class="chart-box tall"><canvas id="comp-chart"></canvas></div>
-      <p class="muted"><small>Índice base 100 · precios al ${esc(comp.precios_es || "")} · SPY ${pct(comp.spy && comp.spy.ret_pct)}</small></p></div>
-      <div class="card lista">${comp.tracks.slice().sort((a, b) => (b.ret_pct ?? -1e9) - (a.ret_pct ?? -1e9)).map(x =>
-        `<div class="li"><span><span class="sw" style="background:${esc(x.color)}"></span>${esc(x.nombre)}</span>
-          <span class="r"><b class="${cls(x.ret_pct)}">${pct(x.ret_pct)}</b><small class="${cls(x.vs_spy_pct)}">${pct(x.vs_spy_pct)} vs SPY</small></span></div>`).join("")}</div>`;
+    h += `<div class="card"><div class="chart-box tall"><canvas id="comp-chart"></canvas></div>
+      <p class="muted"><small>Rentabilidad desde que empezó cada una. La línea blanca discontinua es el S&amp;P 500: lo que va por encima, le gana. Precios al ${esc(comp.precios_es || "")}.</small></p></div>`;
   }
-  if (tr && tr.resumen) {
-    const r = tr.resumen;
-    h += `<h2>Track de señales</h2><div class="card kv">
-      <div><span>Señales</span><b>${r.n} · ${r.abiertas} abiertas</b></div>
-      <div><span>Objetivo / stop</span><b><span class="pos">${r.objetivo}</span> / <span class="neg">${r.stop}</span> · ${num(r.aciertos_pct, 0)} % aciertos</b></div>
-      <div><span>Media por señal</span><b class="${cls(r.media_pct)}">${pct(r.media_pct)}</b></div>
-      <div><span>Media SPY mismo periodo</span><b class="${cls(r.media_spy_pct)}">${pct(r.media_spy_pct)}</b></div>
-      <div><span>Baten al SPY</span><b>${num(r.baten_spy_pct, 0)} %</b></div>
-    </div>
-    ${r.significancia && r.significancia.texto ? `<p class="muted">${esc(r.significancia.texto)}</p>` : ""}
-    ${tr.autopsia && tr.autopsia.texto ? `<details class="card"><summary>Autopsia (ganadoras vs perdedoras)</summary><p class="muted">${esc(tr.autopsia.texto)}</p></details>` : ""}
-    <details class="card"><summary>Últimas señales</summary><div class="lista">${(tr.senales || []).slice(0, 25).map(s =>
-      `<button class="li" data-t="${esc(s.ticker)}"><span><b class="tk">${esc(s.ticker)}</b> <small class="muted">${esc(s.fecha_es || fecha(s.fecha))}</small></span>
-        <span class="r"><b class="${cls(s.rent_pct)}">${pct(s.rent_pct)}</b><small>${esc(s.estado || "")}</small></span></button>`).join("")}</div></details>`;
-  }
-  if (car && car.registro) {
-    car.registro.forEach(defn => {
-      const dd = (car.datos || {})[defn.clave]; if (!dd) return;
-      const sg = dd.seguimiento || {};
-      h += `<h2><span class="sw" style="background:${esc(defn.color)}"></span>${esc(defn.nombre)}</h2>
-        <div class="card"><p class="muted"><small>${esc(defn.subtitulo || "")}</small></p>
-        <div class="kpis">
-          <div><span>Abiertas</span><b>${sg.n ?? 0}${sg.max ? "/" + sg.max : ""}</b></div>
-          <div><span>Rentab.</span><b class="${cls(sg.ret_pct)}">${pct(sg.ret_pct)}</b></div>
-          <div><span>vs SPY</span><b class="${cls(sg.vs_spy_pct)}">${pct(sg.vs_spy_pct)}</b></div>
-          <div><span>Cerradas</span><b>${sg.cerradas_n ?? 0}</b></div>
-          <div><span>Media cerradas</span><b class="${cls(sg.cerradas_media_pct)}">${pct(sg.cerradas_media_pct)}</b></div>
-          <div><span>Positivas</span><b>${sg.cerradas_positivas ?? "—"}</b></div>
-        </div>
-        ${(sg.posiciones || []).length ? `<div class="lista">${sg.posiciones.map(x => `<div class="li"><span><b class="tk">${esc(x.ticker)}</b> <small class="muted">${esc(x.nombre || "")} · ${fecha(x.fecha_entrada)}</small></span><b class="${cls(x.ret_pct)}">${pct(x.ret_pct)}</b></div>`).join("")}</div>` : `<p class="muted">${esc(defn.sin_posiciones || "Sin posiciones abiertas.")}</p>`}
-        ${(dd.candidatas_hoy || []).length ? `<p class="muted">Candidatas hoy: ${dd.candidatas_hoy.map(c => `<b>${esc(c.ticker)}</b>`).join(", ")}</p>` : ""}
-        ${sg.significancia && sg.significancia.texto ? `<p class="muted"><small>${esc(sg.significancia.texto)}</small></p>` : ""}
-        </div>`;
-    });
-  }
-  h += `<p class="pie">Carteras en papel, sin dinero real. Información, no recomendación.</p>`;
+  h += `<div class="card lista">` + claves.map(k => {
+    const x = (det && det[k]) || {}, t = tracks[k] || {};
+    const nombre = x.nombre || t.nombre || k, color = x.color || t.color || "#57534e";
+    const ret = x.ret_pct ?? t.ret_pct, vs = x.vs_spy_pct ?? t.vs_spy_pct;
+    const n = x.abiertas ? x.abiertas.length : null;
+    return `<button class="li car" data-c="${esc(k)}">
+      <span class="car-m"><span><span class="sw" style="background:${esc(color)}"></span><b>${esc(nombre)}</b></span>
+        <small class="muted">${esc(DESC_CARTERAS[k] || "")}${n != null ? ` · ${n} abierta${n === 1 ? "" : "s"}` : ""}</small></span>
+      <span class="r"><b class="${cls(ret)}">${ret == null ? "—" : pc0(ret)}</b><small class="${cls(vs)}">${vs == null ? "" : pts(vs, 0) + " vs S&amp;P"}</small></span>
+      <span class="chev">›</span>
+    </button>`; }).join("") + `</div>`;
+  h += `<p class="pie">Información, no recomendación.</p>`;
   el.innerHTML = h;
-  el.querySelectorAll("[data-t]").forEach(b => b.onclick = () => abrirFicha(b.dataset.t));
+  el.querySelectorAll("[data-c]").forEach(b => b.onclick = () => abrirCartera(b.dataset.c));
   const cv = $("#comp-chart");
   if (cv && comp && window.Chart && $("#s-carteras").classList.contains("on")) {
     const ds = comp.tracks.map(x => ({ label: x.nombre, data: x.indice, borderColor: x.color, borderWidth: 1.6, pointRadius: 0, spanGaps: true }));
-    ds.push({ label: "SPY", data: comp.spy.indice, borderColor: "#f5f5f4", borderWidth: 1.4, borderDash: [5, 4], pointRadius: 0 });
+    ds.push({ label: "S&P 500", data: comp.spy.indice, borderColor: "#f5f5f4", borderWidth: 1.4, borderDash: [5, 4], pointRadius: 0 });
     if (charts.comp) charts.comp.destroy();
     charts.comp = new Chart(cv, { type: "line", data: { labels: comp.fechas.map(fecha), datasets: ds }, options: baseOpts({ pctAxis: true }) });
   }
+}
+
+function abrirCartera(clave){
+  const det = (d("carteras_detalle") || {})[clave];
+  const t = (((d("comparativa") || {}).tracks) || []).find(x => x.clave === clave) || {};
+  if (!det) { abrirSheet(`<div class="sh-h"><b>${esc(t.nombre || clave)}</b></div>${cardVacia("El detalle de esta cartera llegará con el próximo escaneo diario.")}`); return; }
+  const ret = det.ret_pct ?? t.ret_pct, vs = det.vs_spy_pct ?? t.vs_spy_pct;
+  let h = `<div class="sh-h"><div class="car-t"><span class="sw" style="background:${esc(det.color || t.color || "#57534e")}"></span><b>${esc(det.nombre)}</b></div>
+      <div class="muted">${esc(DESC_CARTERAS[clave] || "")}${det.desde ? ` · desde el ${fecha(det.desde)}` : ""}</div></div>
+    <div class="kpis k2">
+      <div><span>Rentabilidad</span><b class="${cls(ret)}">${ret == null ? "—" : pct(ret)}</b></div>
+      <div><span>Frente al S&amp;P 500</span><b class="${cls(vs)}">${vs == null ? "—" : pts(vs, 1)}</b></div>
+    </div>`;
+  if (clave === "track") {
+    const r = (d("track") || {}).resumen;
+    if (r) h += `<p class="muted">De ${r.objetivo + r.stop} señales cerradas, ${r.objetivo} llegaron al objetivo y ${r.stop} salieron por la salida (${num(r.aciertos_pct, 0)} % de aciertos).</p>`;
+  }
+  h += `<div class="regla"><b>Cuándo vende:</b> ${esc(det.regla || "—")}</div>`;
+  const ab = det.abiertas || [];
+  h += `<h3>Valores abiertos (${ab.length})</h3>`;
+  h += ab.length ? `<div class="card lista">` + ab.map(p => `<div class="li pos-l2">
+      <div class="pl-top"><span><b class="tk">${esc(p.ticker)}</b> <small class="muted">${esc(p.nombre || "")}</small></span>
+        <b class="${cls(p.ret_pct)}">${p.ret_pct == null ? "—" : pct(p.ret_pct)}</b></div>
+      <div class="muted pl-l">Compra el ${fecha(p.fecha_entrada)} a ${px(p.precio_entrada)} · ahora ${px(p.precio_actual)}</div>
+      ${p.stop && p.objetivo ? `<div class="barra"><span class="b-stop">${px(p.stop)}</span><div class="b-pista"><div class="b-pto" style="left:${p.progreso_pct ?? 50}%"></div></div><span class="b-obj">${px(p.objetivo)}</span></div>`
+        : p.progreso_pct != null ? `<div class="tiempo"><div style="width:${p.progreso_pct}%"></div></div>` : ""}
+      <div class="muted pl-l"><small>${esc(p.salida || "")}</small></div>
+    </div>`).join("") + `</div>` : cardVacia("Ahora mismo no tiene ningún valor abierto.");
+  const ce = det.cerradas || [];
+  if (ce.length) h += `<details class="card plegable"><summary>Últimas cerradas (${ce.length})</summary><div class="lista">` + ce.map(p =>
+    `<div class="li"><span><b class="tk">${esc(p.ticker)}</b> <small class="muted">${fecha(p.fecha_entrada)} → ${fecha(p.fecha_salida)}${p.motivo ? " · " + esc(p.motivo) : ""}</small></span><b class="${cls(p.ret_pct)}">${p.ret_pct == null ? "—" : pct(p.ret_pct)}</b></div>`).join("") + `</div></details>`;
+  h += `<p class="pie">Cartera en papel, sin dinero real. Precios del último escaneo.</p>`;
+  abrirSheet(h);
 }
 
 /* ============================================================
